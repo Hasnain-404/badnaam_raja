@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -10,7 +10,13 @@ const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 const bundledYtDlp = path.join(__dirname, 'bin', 'yt-dlp.exe');
 const parentYtDlp = path.join(__dirname, '..', 'bin', 'yt-dlp.exe');
 const availableYtDlp = fs.existsSync(bundledYtDlp) ? bundledYtDlp : parentYtDlp;
-const ytDlp = fs.existsSync(availableYtDlp) ? `"${availableYtDlp}"` : 'yt-dlp';
+const ytDlp = fs.existsSync(availableYtDlp) ? availableYtDlp : 'yt-dlp';
+const denoCandidates = [
+    process.env.DENO_PATH,
+    '/opt/render/project/.deno/bin/deno',
+    '/usr/local/bin/deno'
+].filter(Boolean);
+const denoPath = denoCandidates.find(candidate => fs.existsSync(candidate));
 const streamCache = new Map();
 const pendingStreams = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
@@ -35,9 +41,18 @@ app.get('/stream/:id', (req, res) => {
             .catch(() => res.status(502).json({ error: 'Could not extract the audio stream.' }));
     }
 
-    const command = `${ytDlp} -g -f "ba" "https://www.youtube.com/watch?v=${id}"`;
+    const args = [
+        '-g',
+        '-f', 'ba',
+        '--no-playlist',
+        '--extractor-args', 'youtube:player_client=web_safari'
+    ];
+    if (denoPath) args.push('--js-runtimes', `deno:${denoPath}`);
+    if (process.env.YOUTUBE_COOKIES_FILE) args.push('--cookies', process.env.YOUTUBE_COOKIES_FILE);
+    args.push(`https://www.youtube.com/watch?v=${id}`);
+
     const extraction = new Promise((resolve, reject) => {
-        exec(command, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+        execFile(ytDlp, args, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
             if (error) {
                 console.error(`yt-dlp failed for ${id}:`, stderr || error.message);
                 reject(error);

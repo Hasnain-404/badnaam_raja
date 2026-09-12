@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: badnaam-raja
+    runtime: node
+    buildCommand: npm install && pip install yt-dlp && curl -fsSL https://deno.land/install.sh | sh
+    startCommand: npm start
