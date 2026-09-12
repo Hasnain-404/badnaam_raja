@@ -215,10 +215,9 @@ initMediaSession();
 /* ─── PLAYBACK CONTROLS ─────────────────────────────────────────── */
 async function playTrack(videoId) {
   if (!videoId) return;
-  if (!streamUrlCache.has(videoId) && $playerStatus) $playerStatus.textContent = 'Loading...';
+  if ($playerStatus) $playerStatus.textContent = 'Loading...';
   try {
-    const url = await fetchStreamUrl(videoId);
-    audioPlayer.src = url;
+    audioPlayer.src = `${streamServerOrigin}/audio/${encodeURIComponent(videoId)}`;
     await audioPlayer.play();
   } catch (error) {
     console.error('Audio stream error:', error);

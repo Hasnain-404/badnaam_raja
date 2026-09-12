@@ -34,6 +34,30 @@ const streamCache = new Map();
 const pendingStreams = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 
+function getAudioUrl(id) {
+    const cached = streamCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.url);
+    if (pendingStreams.has(id)) return pendingStreams.get(id);
+
+    const extraction = extractAudioUrl(id, 'web_safari')
+        .catch(() => extractAudioUrl(id, 'tv_embedded'))
+        .then(url => {
+            streamCache.set(id, { url, expiresAt: Date.now() + CACHE_TTL });
+            return url;
+        })
+        .catch(error => {
+            console.error(`yt-dlp failed for ${id}: ${error.message}`);
+            throw error;
+        });
+
+    pendingStreams.set(id, extraction);
+    extraction.then(
+        () => pendingStreams.delete(id),
+        () => pendingStreams.delete(id)
+    );
+    return extraction;
+}
+
 function extractAudioUrl(id, client) {
     const args = [
         '-g',
@@ -72,33 +96,45 @@ app.get('/stream/:id', (req, res) => {
         return res.status(400).json({ error: 'Invalid YouTube video ID.' });
     }
 
-    const cached = streamCache.get(id);
-    if (cached && cached.expiresAt > Date.now()) {
-        return res.json({ url: cached.url });
+    getAudioUrl(id)
+        .then(url => res.json({ url }))
+        .catch(() => res.status(502).json({ error: 'Could not extract the audio stream.' }));
+});
+
+app.get('/audio/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!VIDEO_ID.test(id)) {
+        return res.status(400).send('Invalid YouTube video ID.');
     }
 
-    if (pendingStreams.has(id)) {
-        return pendingStreams.get(id)
-            .then(url => res.json({ url }))
-            .catch(() => res.status(502).json({ error: 'Could not extract the audio stream.' }));
-    }
+    try {
+        const url = await getAudioUrl(id);
+        const headers = {};
+        if (req.headers.range) headers.Range = req.headers.range;
+        let upstream = await fetch(url, { headers });
 
-    const extraction = extractAudioUrl(id, 'web_safari')
-        .catch(() => extractAudioUrl(id, 'tv_embedded'))
-        .then(url => {
-            streamCache.set(id, { url, expiresAt: Date.now() + CACHE_TTL });
-            return url;
-        })
-        .catch(error => {
-            console.error(`yt-dlp failed for ${id}: ${error.message}`);
-            throw error;
-        });
-    pendingStreams.set(id, extraction);
-    extraction.then(
-        () => pendingStreams.delete(id),
-        () => pendingStreams.delete(id)
-    );
-    extraction.then(url => res.json({ url })).catch(() => res.status(502).json({ error: 'Could not extract the audio stream.' }));
+        // Signed YouTube URLs can expire while cached; refresh once and retry.
+        if (upstream.status === 403 || upstream.status === 410) {
+            streamCache.delete(id);
+            const freshUrl = await getAudioUrl(id);
+            upstream = await fetch(freshUrl, { headers });
+        }
+
+        if (!upstream.ok || !upstream.body) {
+            return res.status(502).send('Audio source unavailable.');
+        }
+
+        res.status(upstream.status);
+        for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+            const value = upstream.headers.get(header);
+            if (value) res.setHeader(header, value);
+        }
+        const { Readable } = require('stream');
+        Readable.fromWeb(upstream.body).pipe(res);
+    } catch (error) {
+        console.error(`Audio proxy failed for ${id}: ${error.message}`);
+        res.status(502).send('Could not load audio.');
+    }
 });
 
 app.listen(PORT, () => {
