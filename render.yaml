@@ -2,5 +2,5 @@ services:
   - type: web
     name: badnaam-raja
     runtime: node
-    buildCommand: npm install && pip install yt-dlp && DENO_INSTALL=/opt/render/project/.deno sh -c "curl -fsSL https://deno.land/install.sh | sh"
+    buildCommand: npm install && pip install yt-dlp && export DENO_INSTALL=/opt/render/project/.deno && curl -fsSL https://deno.land/install.sh | sh -s -- -y && test -x /opt/render/project/.deno/bin/deno
     startCommand: npm start
