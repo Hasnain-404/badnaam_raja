@@ -12,6 +12,7 @@ const parentYtDlp = path.join(__dirname, '..', 'bin', 'yt-dlp.exe');
 const availableYtDlp = fs.existsSync(bundledYtDlp) ? bundledYtDlp : parentYtDlp;
 const ytDlp = fs.existsSync(availableYtDlp) ? availableYtDlp : 'yt-dlp';
 const cookiesPath = process.env.YOUTUBE_COOKIES_FILE || '/etc/secrets/youtube-cookies.txt';
+const writableCookiesPath = '/tmp/youtube-cookies.txt';
 const denoCandidates = [
     process.env.DENO_PATH,
     '/opt/render/project/.deno/bin/deno',
@@ -20,6 +21,15 @@ const denoCandidates = [
     '/usr/local/bin/deno'
 ].filter(Boolean);
 const denoPath = denoCandidates.find(candidate => fs.existsSync(candidate));
+let ytDlpCookiesPath = null;
+if (fs.existsSync(cookiesPath)) {
+    try {
+        fs.copyFileSync(cookiesPath, writableCookiesPath);
+        ytDlpCookiesPath = writableCookiesPath;
+    } catch (error) {
+        console.error('Could not prepare cookies file for yt-dlp:', error.message);
+    }
+}
 const streamCache = new Map();
 const pendingStreams = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
@@ -51,7 +61,7 @@ app.get('/stream/:id', (req, res) => {
         '--extractor-args', 'youtube:player_client=web_safari'
     ];
     if (denoPath) args.push('--js-runtimes', `deno:${denoPath}`);
-    if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
+    if (ytDlpCookiesPath) args.push('--cookies', ytDlpCookiesPath);
     args.push(`https://www.youtube.com/watch?v=${id}`);
 
     const extraction = new Promise((resolve, reject) => {
