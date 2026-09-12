@@ -34,6 +34,35 @@ const streamCache = new Map();
 const pendingStreams = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 
+function extractAudioUrl(id, client) {
+    const args = [
+        '-g',
+        '-f', 'bestaudio/best',
+        '--no-playlist',
+        '--force-ipv4',
+        '--remote-components', 'ejs:github',
+        '--extractor-args', `youtube:player_client=${client}`
+    ];
+    if (denoPath) args.push('--js-runtimes', `deno:${denoPath}`);
+    if (ytDlpCookiesPath && client === 'web_safari') args.push('--cookies', ytDlpCookiesPath);
+    args.push(`https://www.youtube.com/watch?v=${id}`);
+
+    return new Promise((resolve, reject) => {
+        execFile(ytDlp, args, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+            if (error) {
+                reject(new Error(`${client}: ${stderr || error.message}`));
+                return;
+            }
+            const url = stdout.trim().split(/\r?\n/)[0];
+            if (!url) {
+                reject(new Error(`${client}: yt-dlp returned no audio URL.`));
+                return;
+            }
+            resolve(url);
+        });
+    });
+}
+
 app.use(cors());
 app.use(express.static(__dirname));
 
@@ -54,34 +83,16 @@ app.get('/stream/:id', (req, res) => {
             .catch(() => res.status(502).json({ error: 'Could not extract the audio stream.' }));
     }
 
-    const args = [
-        '-g',
-        '-f', 'ba',
-        '--no-playlist',
-        '--extractor-args', 'youtube:player_client=web_safari'
-    ];
-    if (denoPath) args.push('--js-runtimes', `deno:${denoPath}`);
-    if (ytDlpCookiesPath) args.push('--cookies', ytDlpCookiesPath);
-    args.push(`https://www.youtube.com/watch?v=${id}`);
-
-    const extraction = new Promise((resolve, reject) => {
-        execFile(ytDlp, args, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`yt-dlp failed for ${id}:`, stderr || error.message);
-                reject(error);
-                return;
-            }
-
-            const url = stdout.trim().split(/\r?\n/)[0];
-            if (!url) {
-                reject(new Error('yt-dlp returned no audio URL.'));
-                return;
-            }
-
+    const extraction = extractAudioUrl(id, 'web_safari')
+        .catch(() => extractAudioUrl(id, 'tv_embedded'))
+        .then(url => {
             streamCache.set(id, { url, expiresAt: Date.now() + CACHE_TTL });
-            resolve(url);
+            return url;
+        })
+        .catch(error => {
+            console.error(`yt-dlp failed for ${id}: ${error.message}`);
+            throw error;
         });
-    });
     pendingStreams.set(id, extraction);
     extraction.then(
         () => pendingStreams.delete(id),
